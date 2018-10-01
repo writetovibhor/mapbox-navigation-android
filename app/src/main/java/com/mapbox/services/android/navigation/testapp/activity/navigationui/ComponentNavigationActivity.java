@@ -1,26 +1,51 @@
 package com.mapbox.services.android.navigation.testapp.activity.navigationui;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentSender;
+import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.location.Location;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.provider.Settings;
 import android.support.annotation.NonNull;
 import android.support.constraint.ConstraintLayout;
 import android.support.design.widget.BaseTransientBottomBar;
 import android.support.design.widget.FloatingActionButton;
 import android.support.design.widget.Snackbar;
 import android.support.transition.TransitionManager;
+import android.support.v4.app.ActivityCompat;
 import android.support.v7.app.AppCompatActivity;
+import android.util.Log;
 import android.view.View;
+import android.widget.Toast;
 
+import com.google.android.gms.common.api.ApiException;
+import com.google.android.gms.common.api.ResolvableApiException;
+import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.location.LocationAvailability;
+import com.google.android.gms.location.LocationCallback;
+import com.google.android.gms.location.LocationRequest;
+import com.google.android.gms.location.LocationResult;
+import com.google.android.gms.location.LocationServices;
+import com.google.android.gms.location.LocationSettingsRequest;
+import com.google.android.gms.location.LocationSettingsResponse;
+import com.google.android.gms.location.LocationSettingsStatusCodes;
+import com.google.android.gms.location.SettingsClient;
+import com.google.android.gms.tasks.OnCompleteListener;
+import com.google.android.gms.tasks.OnFailureListener;
+import com.google.android.gms.tasks.OnSuccessListener;
+import com.google.android.gms.tasks.Task;
 import com.mapbox.android.core.location.LocationEngine;
 import com.mapbox.android.core.location.LocationEngineListener;
 import com.mapbox.android.core.location.LocationEnginePriority;
-import com.mapbox.android.core.location.LocationEngineProvider;
 import com.mapbox.api.directions.v5.models.DirectionsResponse;
 import com.mapbox.api.directions.v5.models.DirectionsRoute;
 import com.mapbox.geojson.Point;
@@ -32,6 +57,7 @@ import com.mapbox.mapboxsdk.geometry.LatLngBounds;
 import com.mapbox.mapboxsdk.maps.MapView;
 import com.mapbox.mapboxsdk.maps.MapboxMap;
 import com.mapbox.mapboxsdk.maps.OnMapReadyCallback;
+import com.mapbox.services.android.navigation.testapp.BuildConfig;
 import com.mapbox.services.android.navigation.testapp.R;
 import com.mapbox.services.android.navigation.ui.v5.camera.DynamicCamera;
 import com.mapbox.services.android.navigation.ui.v5.instruction.InstructionView;
@@ -52,6 +78,7 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import butterknife.BindView;
 import butterknife.ButterKnife;
@@ -95,15 +122,305 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
   @BindView(R.id.cancelNavigationFab)
   FloatingActionButton cancelNavigationFab;
 
-  private LocationEngine locationEngine;
+
   private MapboxNavigation navigation;
   private NavigationSpeechPlayer speechPlayer;
   private NavigationMapboxMap navigationMap;
   private Location lastLocation;
+  private long lastTime;
   private DirectionsRoute route;
   private Point destination;
   private MapState mapState;
   private String filename;
+
+
+  private class AlternativeLocationEngine extends LocationEngine {
+    private static final String TAG = "AltLocationEngine";
+    private static final int REQUEST_PERMISSIONS_REQUEST_CODE = 34;
+    private static final int REQUEST_CHECK_SETTINGS = 0x1;
+    private long UPDATE_INTERVAL_IN_MILLISECONDS = 1000;
+    private long FASTEST_UPDATE_INTERVAL_IN_MILLISECONDS = 500;
+    private FusedLocationProviderClient mFusedLocationClient;
+    private SettingsClient mSettingsClient;
+    private LocationRequest mLocationRequest;
+    private LocationSettingsRequest mLocationSettingsRequest;
+    private boolean mConnected = false;
+    class GetLocationListener implements OnSuccessListener<Location> {
+      public Location location = null;
+      @Override
+      public void onSuccess(Location l) {
+        location = l;
+      }
+      //when it fails do we want to null out the location?
+    };
+    private GetLocationListener listener;
+
+    class WrappedLocationEngineListener extends com.google.android.gms.location.LocationCallback {
+      LocationEngineListener wrapped;
+      WrappedLocationEngineListener(LocationEngineListener listener) {
+        wrapped = listener;
+      }
+
+      public void onConnected() {
+        wrapped.onConnected();
+      }
+
+      @Override
+      public void onLocationAvailability(LocationAvailability locationAvailability) {
+        super.onLocationAvailability(locationAvailability);
+      }
+
+      @Override
+      public void onLocationResult(LocationResult locationResult) {
+        super.onLocationResult(locationResult);
+        wrapped.onLocationChanged(locationResult.getLastLocation());
+      }
+    };
+    private CopyOnWriteArrayList<WrappedLocationEngineListener> wrappedLocationListeners;
+    @Override
+    public void addLocationEngineListener(LocationEngineListener listener) {
+      int i = this.locationListeners.indexOf(listener);
+      if (i < 0) {
+        locationListeners.add(listener);
+        wrappedLocationListeners.add(new WrappedLocationEngineListener(listener));
+      }
+    }
+    @Override
+    public boolean removeLocationEngineListener(LocationEngineListener listener) {
+      int i = this.locationListeners.indexOf(listener);
+      if(i >= 0) {
+        locationListeners.remove(i);
+        wrappedLocationListeners.remove(i);
+        return true;
+      }
+      return false;
+    }
+
+    AlternativeLocationEngine() {
+      super();
+      listener = new GetLocationListener();
+      wrappedLocationListeners = new CopyOnWriteArrayList<>();
+    }
+
+    @Override
+    public void activate() {
+      if(!mConnected) {
+        mFusedLocationClient = LocationServices.getFusedLocationProviderClient(ComponentNavigationActivity.this);
+        mSettingsClient = LocationServices.getSettingsClient(ComponentNavigationActivity.this);
+        if (checkPermissions()) {
+          startLocationUpdates();
+        } else if (!checkPermissions()) {
+          requestPermissions();
+        }
+      }
+    }
+
+    @Override
+    public void deactivate() {
+      stopLocationUpdates();
+      mConnected = false;
+    }
+
+    @Override
+    public boolean isConnected() {
+      return mConnected;
+    }
+
+    @Override
+    @SuppressWarnings({"MissingPermission"})
+    public Location getLastLocation() {
+      if(checkPermissions()) {
+        mFusedLocationClient.getLastLocation().addOnSuccessListener(listener);
+        return listener.location;
+      }
+      return null;
+    }
+
+    @Override
+    @SuppressWarnings({"MissingPermission"})
+    public void requestLocationUpdates() {
+      //noinspection MissingPermission
+      if(mConnected)
+        for(LocationCallback wrapped : wrappedLocationListeners)
+          mFusedLocationClient.requestLocationUpdates(mLocationRequest,
+                wrapped, Looper.myLooper());
+    }
+
+    @Override
+    public void removeLocationUpdates() {
+      stopLocationUpdates();
+    }
+
+    @Override
+    public Type obtainType() {
+      return Type.GOOGLE_PLAY_SERVICES;
+    }
+
+    private void createLocationRequest() {
+      mLocationRequest = new LocationRequest();
+
+      // Sets the desired interval for active location updates. This interval is
+      // inexact. You may not receive updates at all if no location sources are available, or
+      // you may receive them slower than requested. You may also receive updates faster than
+      // requested if other applications are requesting location at a faster interval.
+      mLocationRequest.setInterval(UPDATE_INTERVAL_IN_MILLISECONDS);
+
+      // Sets the fastest rate for active location updates. This interval is exact, and your
+      // application will never receive updates faster than this value.
+      mLocationRequest.setFastestInterval(FASTEST_UPDATE_INTERVAL_IN_MILLISECONDS);
+
+      mLocationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
+    }
+
+    private void buildLocationSettingsRequest() {
+      LocationSettingsRequest.Builder builder = new LocationSettingsRequest.Builder();
+      builder.addLocationRequest(mLocationRequest);
+      mLocationSettingsRequest = builder.build();
+    }
+
+    private void startLocationUpdates() {
+      // fill out location request with most recent settings
+      createLocationRequest();
+      // fill out the request settings
+      buildLocationSettingsRequest();
+
+      // Begin by checking if the device has the necessary location settings.
+      mSettingsClient.checkLocationSettings(mLocationSettingsRequest)
+              .addOnSuccessListener(ComponentNavigationActivity.this, new OnSuccessListener<LocationSettingsResponse>() {
+                @Override
+                public void onSuccess(LocationSettingsResponse locationSettingsResponse) {
+                  Log.i(TAG, "All location settings are satisfied.");
+                  mConnected = true;
+                  for(WrappedLocationEngineListener wrapped : wrappedLocationListeners)
+                    wrapped.onConnected();
+                }
+              })
+              .addOnFailureListener(ComponentNavigationActivity.this, new OnFailureListener() {
+                @Override
+                public void onFailure(@NonNull Exception e) {
+                  mConnected = false;
+                  int statusCode = ((ApiException) e).getStatusCode();
+                  switch (statusCode) {
+                    case LocationSettingsStatusCodes.RESOLUTION_REQUIRED:
+                      Log.i(TAG, "Location settings are not satisfied. Attempting to upgrade " +
+                              "location settings ");
+                      try {
+                        // Show the dialog by calling startResolutionForResult(), and check the
+                        // result in onActivityResult().
+                        ResolvableApiException rae = (ResolvableApiException) e;
+                        rae.startResolutionForResult(ComponentNavigationActivity.this, REQUEST_CHECK_SETTINGS);
+                      } catch (IntentSender.SendIntentException sie) {
+                        Log.i(TAG, "PendingIntent unable to execute request.");
+                      }
+                      break;
+                    case LocationSettingsStatusCodes.SETTINGS_CHANGE_UNAVAILABLE:
+                      String errorMessage = "Location settings are inadequate, and cannot be " +
+                              "fixed here. Fix in Settings.";
+                      Log.e(TAG, errorMessage);
+                      Toast.makeText(ComponentNavigationActivity.this, errorMessage, Toast.LENGTH_LONG).show();
+                  }
+                }
+              });
+    }
+
+    private void stopLocationUpdates() {
+       // It is a good practice to remove location requests when the activity is in a paused or
+      // stopped state. Doing so helps battery performance and is especially
+      // recommended in applications that request frequent location updates.
+      for(LocationCallback wrapped : wrappedLocationListeners)
+        mFusedLocationClient.removeLocationUpdates(wrapped)
+              .addOnCompleteListener(ComponentNavigationActivity.this, new OnCompleteListener<Void>() {
+                @Override
+                public void onComplete(@NonNull Task<Void> task) {
+                  //nothing to do here yet
+                }
+              });
+    }
+
+    private boolean checkPermissions() {
+      int permissionState = ActivityCompat.checkSelfPermission(ComponentNavigationActivity.this,
+              Manifest.permission.ACCESS_FINE_LOCATION);
+      return permissionState == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestPermissions() {
+      boolean shouldProvideRationale =
+              ActivityCompat.shouldShowRequestPermissionRationale(ComponentNavigationActivity.this,
+                      Manifest.permission.ACCESS_FINE_LOCATION);
+
+      // Provide an additional rationale to the user. This would happen if the user denied the
+      // request previously, but didn't check the "Don't ask again" checkbox.
+      if (shouldProvideRationale) {
+        Log.i(TAG, "Displaying permission rationale to provide additional context.");
+        Snackbar.make(navigationLayout, "Location permission is needed for core functionality", Snackbar.LENGTH_INDEFINITE)
+                .setAction(android.R.string.ok, new View.OnClickListener() {
+                  @Override
+                  public void onClick(View view) {
+                    // Request permission
+                    ActivityCompat.requestPermissions(ComponentNavigationActivity.this,
+                            new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
+                            REQUEST_PERMISSIONS_REQUEST_CODE);
+                  }
+                }).show();
+      } else {
+        Log.i(TAG, "Requesting permission");
+        // Request permission. It's possible this can be auto answered if device policy
+        // sets the permission in a given state or the user denied the permission
+        // previously and checked "Never ask again".
+        ActivityCompat.requestPermissions(ComponentNavigationActivity.this,
+                new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
+                REQUEST_PERMISSIONS_REQUEST_CODE);
+      }
+    }
+  }
+
+  private LocationEngine locationEngine;
+
+  @Override
+  public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                         @NonNull int[] grantResults) {
+    Log.i(AlternativeLocationEngine.TAG, "onRequestPermissionResult");
+    if (requestCode == AlternativeLocationEngine.REQUEST_PERMISSIONS_REQUEST_CODE) {
+      if (grantResults.length <= 0) {
+        // If user interaction was interrupted, the permission request is cancelled and you
+        // receive empty arrays.
+        Log.i(AlternativeLocationEngine.TAG, "User interaction was cancelled.");
+      } else if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+          Log.i(AlternativeLocationEngine.TAG, "Permission granted, updates requested, starting location updates");
+          locationEngine.activate();
+      } else {
+        // Permission denied.
+
+        // Notify the user via a SnackBar that they have rejected a core permission for the
+        // app, which makes the Activity useless. In a real app, core permissions would
+        // typically be best requested during a welcome-screen flow.
+
+        // Additionally, it is important to remember that a permission might have been
+        // rejected without asking the user for permission (device policy or "Never ask
+        // again" prompts). Therefore, a user interface affordance is typically implemented
+        // when permissions are denied. Otherwise, your app could appear unresponsive to
+        // touches or interactions which have required permissions.
+        Snackbar.make(navigationLayout,"Permission was denied, but is needed for core functionality.", Snackbar.LENGTH_INDEFINITE)
+                .setAction(
+                        R.string.settings, new View.OnClickListener() {
+                          @Override
+                          public void onClick(View view) {
+                            // Build intent that displays the App settings screen.
+                            Intent intent = new Intent();
+                            intent.setAction(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                            Uri uri = Uri.fromParts("package",
+                                    BuildConfig.APPLICATION_ID, null);
+                            intent.setData(uri);
+                            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(intent);
+                          }
+                        }).show();
+      }
+    }
+  }
+
+
 
   private enum MapState {
     INFO,
@@ -211,12 +528,22 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
   @Override
   public void onLocationChanged(Location location) {
     if (lastLocation == null) {
+      lastTime = System.currentTimeMillis();
       // Move the navigationMap camera to the first Location
       moveCameraTo(location);
 
       // Allow navigationMap clicks now that we have the current Location
       navigationMap.retrieveMap().addOnMapLongClickListener(this);
       showSnackbar(LONG_PRESS_MAP_MESSAGE, BaseTransientBottomBar.LENGTH_LONG);
+    }
+    else {
+      long now = System.currentTimeMillis();
+      String logline = String.format(Locale.ENGLISH, "loc_dt %d callback_dt %d cb_loc_dt %d %d",
+              location.getTime() - lastLocation.getTime(),
+              now - lastTime,
+              now - location.getTime(), (int)location.getBearing());
+      lastTime = now;
+      Log.v("GPSLAG", logline);
     }
 
     // Cache for fetching the route later
@@ -262,6 +589,7 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
   public void onPause() {
     super.onPause();
     mapView.onPause();
+    locationEngine.deactivate();
   }
 
   @Override
@@ -320,11 +648,13 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
   }
 
   private void initializeLocationEngine() {
-    LocationEngineProvider locationEngineProvider = new LocationEngineProvider(this);
-    locationEngine = locationEngineProvider.obtainBestLocationEngineAvailable();
+    //LocationEngineProvider locationEngineProvider = new LocationEngineProvider(this);
+    //locationEngine = locationEngineProvider.obtainBestLocationEngineAvailable();
+    locationEngine = new AlternativeLocationEngine();
     locationEngine.setPriority(LocationEnginePriority.HIGH_ACCURACY);
     locationEngine.addLocationEngineListener(this);
-    locationEngine.setFastestInterval(ONE_SECOND_INTERVAL);
+    locationEngine.setInterval(1000);
+    locationEngine.setFastestInterval(500);
     locationEngine.activate();
     showSnackbar(SEARCHING_FOR_GPS_MESSAGE, BaseTransientBottomBar.LENGTH_SHORT);
   }
