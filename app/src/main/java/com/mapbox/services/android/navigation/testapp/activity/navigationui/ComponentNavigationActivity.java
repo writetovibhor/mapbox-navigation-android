@@ -133,9 +133,7 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
   private String filename;
 
 
-  private class AlternativeLocationEngine extends LocationEngine {
-    private static final String TAG = "AltLocationEngine";
-    private static final int REQUEST_PERMISSIONS_REQUEST_CODE = 34;
+  private class AltLocationEngine extends LocationEngine {
     private static final int REQUEST_CHECK_SETTINGS = 0x1;
     private long UPDATE_INTERVAL_IN_MILLISECONDS = 1000;
     private long FASTEST_UPDATE_INTERVAL_IN_MILLISECONDS = 500;
@@ -148,9 +146,9 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
     private Location mLastlocation = null;
 
     class ForwardingLocationCallback extends LocationCallback {
-      AlternativeLocationEngine locationEngine;
+      AltLocationEngine locationEngine;
 
-      ForwardingLocationCallback(AlternativeLocationEngine engine) {
+      ForwardingLocationCallback(AltLocationEngine engine) {
         locationEngine = engine;
       }
       @Override
@@ -163,7 +161,7 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
     };
     private ForwardingLocationCallback forwardingCallback;
 
-    AlternativeLocationEngine() {
+    AltLocationEngine() {
       super();
       forwardingCallback = new ForwardingLocationCallback(this);
     }
@@ -173,11 +171,7 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
       if(!mConnected) {
         mFusedLocationClient = LocationServices.getFusedLocationProviderClient(ComponentNavigationActivity.this);
         mSettingsClient = LocationServices.getSettingsClient(ComponentNavigationActivity.this);
-        if (checkPermissions()) {
-          startLocationUpdates();
-        } else if (!checkPermissions()) {
-          requestPermissions();
-        }
+        startLocationUpdates();
       }
     }
 
@@ -195,14 +189,12 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
     @Override
     @SuppressWarnings({"MissingPermission"})
     public Location getLastLocation() {
-      if(checkPermissions()) {
-        mFusedLocationClient.getLastLocation().addOnSuccessListener(new OnSuccessListener<Location>() {
-          @Override
-          public void onSuccess(Location location) {
-            mLastlocation = location;
-          }
-        });
-      }
+      mFusedLocationClient.getLastLocation().addOnSuccessListener(new OnSuccessListener<Location>() {
+        @Override
+        public void onSuccess(Location location) {
+          mLastlocation = location;
+        }
+      });
       return mLastlocation;
     }
 
@@ -305,83 +297,7 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
                 }
               });
     }
-
-    private boolean checkPermissions() {
-      int permissionState = ActivityCompat.checkSelfPermission(ComponentNavigationActivity.this,
-              Manifest.permission.ACCESS_FINE_LOCATION);
-      return permissionState == PackageManager.PERMISSION_GRANTED;
-    }
-
-    private void requestPermissions() {
-      boolean shouldProvideRationale =
-              ActivityCompat.shouldShowRequestPermissionRationale(ComponentNavigationActivity.this,
-                      Manifest.permission.ACCESS_FINE_LOCATION);
-
-      // Provide an additional rationale to the user. This would happen if the user denied the
-      // request previously, but didn't check the "Don't ask again" checkbox.
-      if (shouldProvideRationale) {
-        Snackbar.make(navigationLayout, "Location permission is needed for core functionality", Snackbar.LENGTH_INDEFINITE)
-                .setAction(android.R.string.ok, new View.OnClickListener() {
-                  @Override
-                  public void onClick(View view) {
-                    // Request permission
-                    ActivityCompat.requestPermissions(ComponentNavigationActivity.this,
-                            new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
-                            REQUEST_PERMISSIONS_REQUEST_CODE);
-                  }
-                }).show();
-      } else {
-        // Request permission. It's possible this can be auto answered if device policy
-        // sets the permission in a given state or the user denied the permission
-        // previously and checked "Never ask again".
-        ActivityCompat.requestPermissions(ComponentNavigationActivity.this,
-                new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
-                REQUEST_PERMISSIONS_REQUEST_CODE);
-      }
-    }
   }
-
-  @Override
-  public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
-                                         @NonNull int[] grantResults) {
-    if (requestCode == AlternativeLocationEngine.REQUEST_PERMISSIONS_REQUEST_CODE) {
-      if (grantResults.length <= 0) {
-
-      } else if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-          locationEngine.activate();
-      } else {
-        // Permission denied.
-
-        // Notify the user via a SnackBar that they have rejected a core permission for the
-        // app, which makes the Activity useless. In a real app, core permissions would
-        // typically be best requested during a welcome-screen flow.
-
-        // Additionally, it is important to remember that a permission might have been
-        // rejected without asking the user for permission (device policy or "Never ask
-        // again" prompts). Therefore, a user interface affordance is typically implemented
-        // when permissions are denied. Otherwise, your app could appear unresponsive to
-        // touches or interactions which have required permissions.
-        Snackbar.make(navigationLayout,"Permission was denied, but is needed for core functionality.", Snackbar.LENGTH_INDEFINITE)
-                .setAction(
-                        R.string.settings, new View.OnClickListener() {
-                          @Override
-                          public void onClick(View view) {
-                            // Build intent that displays the App settings screen.
-                            Intent intent = new Intent();
-                            intent.setAction(
-                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-                            Uri uri = Uri.fromParts("package",
-                                    BuildConfig.APPLICATION_ID, null);
-                            intent.setData(uri);
-                            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                            startActivity(intent);
-                          }
-                        }).show();
-      }
-    }
-  }
-
-
 
   private enum MapState {
     INFO,
@@ -601,7 +517,7 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
   private void initializeLocationEngine() {
     //LocationEngineProvider locationEngineProvider = new LocationEngineProvider(this);
     //locationEngine = locationEngineProvider.obtainBestLocationEngineAvailable();
-    locationEngine = new AlternativeLocationEngine();
+    locationEngine = new AltLocationEngine();
     locationEngine.setPriority(LocationEnginePriority.HIGH_ACCURACY);
     locationEngine.addLocationEngineListener(this);
     locationEngine.setInterval(1000);
