@@ -122,7 +122,7 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
   @BindView(R.id.cancelNavigationFab)
   FloatingActionButton cancelNavigationFab;
 
-
+  private LocationEngine locationEngine;
   private MapboxNavigation navigation;
   private NavigationSpeechPlayer speechPlayer;
   private NavigationMapboxMap navigationMap;
@@ -145,61 +145,28 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
     private LocationRequest mLocationRequest;
     private LocationSettingsRequest mLocationSettingsRequest;
     private boolean mConnected = false;
-    class GetLocationListener implements OnSuccessListener<Location> {
-      public Location location = null;
-      @Override
-      public void onSuccess(Location l) {
-        location = l;
-      }
-      //when it fails do we want to null out the location?
-    };
-    private GetLocationListener listener;
+    private boolean mReceivingUpdates = false;
+    private Location mLastlocation = null;
 
-    class WrappedLocationEngineListener extends com.google.android.gms.location.LocationCallback {
-      LocationEngineListener wrapped;
-      WrappedLocationEngineListener(LocationEngineListener listener) {
-        wrapped = listener;
-      }
+    class ForwardingLocationCallback extends LocationCallback {
+      AlternativeLocationEngine locationEngine;
 
-      public void onConnected() {
-        wrapped.onConnected();
+      ForwardingLocationCallback(AlternativeLocationEngine engine) {
+        locationEngine = engine;
       }
-
-      @Override
-      public void onLocationAvailability(LocationAvailability locationAvailability) {
-        super.onLocationAvailability(locationAvailability);
-      }
-
       @Override
       public void onLocationResult(LocationResult locationResult) {
-        super.onLocationResult(locationResult);
-        wrapped.onLocationChanged(locationResult.getLastLocation());
+        Location location = locationResult.getLastLocation();
+        for(LocationEngineListener lel : locationEngine.locationListeners) {
+          lel.onLocationChanged(location);
+        }
       }
     };
-    private CopyOnWriteArrayList<WrappedLocationEngineListener> wrappedLocationListeners;
-    @Override
-    public void addLocationEngineListener(LocationEngineListener listener) {
-      int i = this.locationListeners.indexOf(listener);
-      if (i < 0) {
-        locationListeners.add(listener);
-        wrappedLocationListeners.add(new WrappedLocationEngineListener(listener));
-      }
-    }
-    @Override
-    public boolean removeLocationEngineListener(LocationEngineListener listener) {
-      int i = this.locationListeners.indexOf(listener);
-      if(i >= 0) {
-        locationListeners.remove(i);
-        wrappedLocationListeners.remove(i);
-        return true;
-      }
-      return false;
-    }
+    private ForwardingLocationCallback forwardingCallback;
 
     AlternativeLocationEngine() {
       super();
-      listener = new GetLocationListener();
-      wrappedLocationListeners = new CopyOnWriteArrayList<>();
+      forwardingCallback = new ForwardingLocationCallback(this);
     }
 
     @Override
@@ -230,20 +197,29 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
     @SuppressWarnings({"MissingPermission"})
     public Location getLastLocation() {
       if(checkPermissions()) {
-        mFusedLocationClient.getLastLocation().addOnSuccessListener(listener);
-        return listener.location;
+        mFusedLocationClient.getLastLocation().addOnSuccessListener(new OnSuccessListener<Location>() {
+          @Override
+          public void onSuccess(Location location) {
+            mLastlocation = location;
+          }
+        });
       }
-      return null;
+      return mLastlocation;
     }
 
     @Override
     @SuppressWarnings({"MissingPermission"})
     public void requestLocationUpdates() {
       //noinspection MissingPermission
-      if(mConnected)
-        for(LocationCallback wrapped : wrappedLocationListeners)
-          mFusedLocationClient.requestLocationUpdates(mLocationRequest,
-                wrapped, Looper.myLooper());
+      if(mConnected && !mReceivingUpdates) {
+        Log.v(TAG, "Alt requesting updates");
+        mFusedLocationClient.requestLocationUpdates(mLocationRequest, forwardingCallback, Looper.myLooper()).addOnSuccessListener(new OnSuccessListener<Void>() {
+          @Override
+          public void onSuccess(Void aVoid) {
+            mReceivingUpdates = true;
+          }
+        });
+      }
     }
 
     @Override
@@ -291,8 +267,8 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
                 public void onSuccess(LocationSettingsResponse locationSettingsResponse) {
                   Log.i(TAG, "All location settings are satisfied.");
                   mConnected = true;
-                  for(WrappedLocationEngineListener wrapped : wrappedLocationListeners)
-                    wrapped.onConnected();
+                  for(LocationEngineListener lel : locationListeners)
+                    lel.onConnected();
                 }
               })
               .addOnFailureListener(ComponentNavigationActivity.this, new OnFailureListener() {
@@ -327,12 +303,12 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
        // It is a good practice to remove location requests when the activity is in a paused or
       // stopped state. Doing so helps battery performance and is especially
       // recommended in applications that request frequent location updates.
-      for(LocationCallback wrapped : wrappedLocationListeners)
-        mFusedLocationClient.removeLocationUpdates(wrapped)
+      mFusedLocationClient.removeLocationUpdates(forwardingCallback)
               .addOnCompleteListener(ComponentNavigationActivity.this, new OnCompleteListener<Void>() {
                 @Override
                 public void onComplete(@NonNull Task<Void> task) {
                   //nothing to do here yet
+                  mReceivingUpdates = false;
                 }
               });
     }
@@ -373,8 +349,6 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
       }
     }
   }
-
-  private LocationEngine locationEngine;
 
   @Override
   public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
@@ -538,10 +512,10 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
     }
     else {
       long now = System.currentTimeMillis();
-      String logline = String.format(Locale.ENGLISH, "loc_dt %d callback_dt %d cb_loc_dt %d %d",
+      String logline = String.format(Locale.ENGLISH, "loc_dt %d callback_dt %d cb_loc_dt %d %d [%f,%f],",
               location.getTime() - lastLocation.getTime(),
               now - lastTime,
-              now - location.getTime(), (int)location.getBearing());
+              now - location.getTime(), (int)location.getBearing(), location.getLatitude(), location.getLongitude());
       lastTime = now;
       Log.v("GPSLAG", logline);
     }
