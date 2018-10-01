@@ -127,7 +127,6 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
   private NavigationSpeechPlayer speechPlayer;
   private NavigationMapboxMap navigationMap;
   private Location lastLocation;
-  private long lastTime;
   private DirectionsRoute route;
   private Point destination;
   private MapState mapState;
@@ -212,7 +211,6 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
     public void requestLocationUpdates() {
       //noinspection MissingPermission
       if(mConnected && !mReceivingUpdates) {
-        Log.v(TAG, "Alt requesting updates");
         mFusedLocationClient.requestLocationUpdates(mLocationRequest, forwardingCallback, Looper.myLooper()).addOnSuccessListener(new OnSuccessListener<Void>() {
           @Override
           public void onSuccess(Void aVoid) {
@@ -265,7 +263,6 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
               .addOnSuccessListener(ComponentNavigationActivity.this, new OnSuccessListener<LocationSettingsResponse>() {
                 @Override
                 public void onSuccess(LocationSettingsResponse locationSettingsResponse) {
-                  Log.i(TAG, "All location settings are satisfied.");
                   mConnected = true;
                   for(LocationEngineListener lel : locationListeners)
                     lel.onConnected();
@@ -278,21 +275,17 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
                   int statusCode = ((ApiException) e).getStatusCode();
                   switch (statusCode) {
                     case LocationSettingsStatusCodes.RESOLUTION_REQUIRED:
-                      Log.i(TAG, "Location settings are not satisfied. Attempting to upgrade " +
-                              "location settings ");
                       try {
                         // Show the dialog by calling startResolutionForResult(), and check the
                         // result in onActivityResult().
                         ResolvableApiException rae = (ResolvableApiException) e;
                         rae.startResolutionForResult(ComponentNavigationActivity.this, REQUEST_CHECK_SETTINGS);
                       } catch (IntentSender.SendIntentException sie) {
-                        Log.i(TAG, "PendingIntent unable to execute request.");
                       }
                       break;
                     case LocationSettingsStatusCodes.SETTINGS_CHANGE_UNAVAILABLE:
                       String errorMessage = "Location settings are inadequate, and cannot be " +
                               "fixed here. Fix in Settings.";
-                      Log.e(TAG, errorMessage);
                       Toast.makeText(ComponentNavigationActivity.this, errorMessage, Toast.LENGTH_LONG).show();
                   }
                 }
@@ -327,7 +320,6 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
       // Provide an additional rationale to the user. This would happen if the user denied the
       // request previously, but didn't check the "Don't ask again" checkbox.
       if (shouldProvideRationale) {
-        Log.i(TAG, "Displaying permission rationale to provide additional context.");
         Snackbar.make(navigationLayout, "Location permission is needed for core functionality", Snackbar.LENGTH_INDEFINITE)
                 .setAction(android.R.string.ok, new View.OnClickListener() {
                   @Override
@@ -339,7 +331,6 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
                   }
                 }).show();
       } else {
-        Log.i(TAG, "Requesting permission");
         // Request permission. It's possible this can be auto answered if device policy
         // sets the permission in a given state or the user denied the permission
         // previously and checked "Never ask again".
@@ -353,14 +344,10 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
   @Override
   public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
                                          @NonNull int[] grantResults) {
-    Log.i(AlternativeLocationEngine.TAG, "onRequestPermissionResult");
     if (requestCode == AlternativeLocationEngine.REQUEST_PERMISSIONS_REQUEST_CODE) {
       if (grantResults.length <= 0) {
-        // If user interaction was interrupted, the permission request is cancelled and you
-        // receive empty arrays.
-        Log.i(AlternativeLocationEngine.TAG, "User interaction was cancelled.");
+
       } else if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-          Log.i(AlternativeLocationEngine.TAG, "Permission granted, updates requested, starting location updates");
           locationEngine.activate();
       } else {
         // Permission denied.
@@ -502,22 +489,12 @@ public class ComponentNavigationActivity extends AppCompatActivity implements On
   @Override
   public void onLocationChanged(Location location) {
     if (lastLocation == null) {
-      lastTime = System.currentTimeMillis();
       // Move the navigationMap camera to the first Location
       moveCameraTo(location);
 
       // Allow navigationMap clicks now that we have the current Location
       navigationMap.retrieveMap().addOnMapLongClickListener(this);
       showSnackbar(LONG_PRESS_MAP_MESSAGE, BaseTransientBottomBar.LENGTH_LONG);
-    }
-    else {
-      long now = System.currentTimeMillis();
-      String logline = String.format(Locale.ENGLISH, "loc_dt %d callback_dt %d cb_loc_dt %d %d [%f,%f],",
-              location.getTime() - lastLocation.getTime(),
-              now - lastTime,
-              now - location.getTime(), (int)location.getBearing(), location.getLatitude(), location.getLongitude());
-      lastTime = now;
-      Log.v("GPSLAG", logline);
     }
 
     // Cache for fetching the route later
