@@ -6,6 +6,7 @@ import android.os.Bundle;
 import android.support.annotation.Nullable;
 import android.support.v7.app.AlertDialog;
 import android.support.v7.app.AppCompatActivity;
+import android.util.Log;
 
 import com.mapbox.api.directions.v5.models.DirectionsResponse;
 import com.mapbox.api.directions.v5.models.DirectionsRoute;
@@ -21,6 +22,7 @@ import com.mapbox.services.android.navigation.v5.navigation.NavigationRoute;
 import com.mapbox.services.android.navigation.v5.routeprogress.ProgressChangeListener;
 import com.mapbox.services.android.navigation.v5.routeprogress.RouteProgress;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -159,6 +161,20 @@ public class WaypointNavigationActivity extends AppCompatActivity implements OnN
   @Override
   public void onProgressChange(Location location, RouteProgress routeProgress) {
     lastKnownLocation = location;
+    Field[] fields = routeProgress.getClass().getDeclaredFields();
+    StringBuilder routeString = new StringBuilder();
+    for (Field field : fields) {
+      field.setAccessible(true);
+      try {
+        routeString.append("{ name:" + field.getName() + ", " +
+                           "type: " + field.getType().getSimpleName() +
+                           "value: " +  String.valueOf(field.get(routeProgress)));
+      } catch (IllegalAccessException e) {
+        e.printStackTrace();
+      }
+    }
+    // Create mSocket as shown here: https://socket.io/blog/native-socket-io-and-android/
+    // mSocket.emit("route_progress", routeString.toString());
   }
 
   private void startNavigation(DirectionsRoute directionsRoute) {
