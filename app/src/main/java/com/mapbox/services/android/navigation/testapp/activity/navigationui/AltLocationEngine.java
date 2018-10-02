@@ -24,16 +24,15 @@ import com.mapbox.android.core.location.LocationEngine;
 import com.mapbox.android.core.location.LocationEngineListener;
 
 public class AltLocationEngine extends LocationEngine {
-    private static final int REQUEST_CHECK_SETTINGS = 0x1;
     private long UPDATE_INTERVAL_IN_MILLISECONDS = 1000;
     private long FASTEST_UPDATE_INTERVAL_IN_MILLISECONDS = 500;
-    private FusedLocationProviderClient mFusedLocationClient;
-    private SettingsClient mSettingsClient;
-    private LocationRequest mLocationRequest;
-    private LocationSettingsRequest mLocationSettingsRequest;
-    private boolean mConnected = false;
-    private boolean mReceivingUpdates = false;
-    private Location mLastlocation = null;
+    private FusedLocationProviderClient fusedLocationClient;
+    private SettingsClient settingsClient;
+    private LocationRequest locationRequest;
+    private LocationSettingsRequest locationSettingsRequest;
+    private boolean connected = false;
+    private boolean receivingUpdates = false;
+    private Location lastlocation = null;
 
     class ForwardingLocationCallback extends LocationCallback {
         AltLocationEngine locationEngine;
@@ -53,14 +52,14 @@ public class AltLocationEngine extends LocationEngine {
 
     AltLocationEngine(@NonNull Activity activity) {
         super();
-        mFusedLocationClient = LocationServices.getFusedLocationProviderClient(activity);
-        mSettingsClient = LocationServices.getSettingsClient(activity);
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(activity);
+        settingsClient = LocationServices.getSettingsClient(activity);
         forwardingCallback = new ForwardingLocationCallback(this);
     }
 
     @Override
     public void activate() {
-        if(!mConnected) {
+        if(!connected) {
             startLocationUpdates();
         }
     }
@@ -68,36 +67,36 @@ public class AltLocationEngine extends LocationEngine {
     @Override
     public void deactivate() {
         stopLocationUpdates();
-        mConnected = false;
+        connected = false;
     }
 
     @Override
     public boolean isConnected() {
-        return mConnected;
+        return connected;
     }
 
     @Override
     @SuppressWarnings({"MissingPermission"})
     public Location getLastLocation() {
-        mFusedLocationClient.getLastLocation().addOnSuccessListener(new OnSuccessListener<Location>() {
+        fusedLocationClient.getLastLocation().addOnSuccessListener(new OnSuccessListener<Location>() {
             @Override
             public void onSuccess(Location location) {
-                mLastlocation = location;
+                lastlocation = location;
             }
         });
-        return mLastlocation;
+        return lastlocation;
     }
 
     @Override
     @SuppressWarnings({"MissingPermission"})
     public void requestLocationUpdates() {
         //noinspection MissingPermission
-        if(mConnected && !mReceivingUpdates) {
-            mFusedLocationClient.requestLocationUpdates(mLocationRequest, forwardingCallback, Looper.myLooper())
+        if(connected && !receivingUpdates) {
+            fusedLocationClient.requestLocationUpdates(locationRequest, forwardingCallback, Looper.myLooper())
                     .addOnSuccessListener(new OnSuccessListener<Void>() {
                         @Override
                         public void onSuccess(Void aVoid) {
-                            mReceivingUpdates = true;
+                            receivingUpdates = true;
                         }
                     });
         }
@@ -114,27 +113,17 @@ public class AltLocationEngine extends LocationEngine {
     }
 
     private void createLocationRequest() {
-        mLocationRequest = new LocationRequest();
-
+        locationRequest = new LocationRequest();
         //TODO: unhardcode these
-
-        // Sets the desired interval for active location updates. This interval is
-        // inexact. You may not receive updates at all if no location sources are available, or
-        // you may receive them slower than requested. You may also receive updates faster than
-        // requested if other applications are requesting location at a faster interval.
-        mLocationRequest.setInterval(UPDATE_INTERVAL_IN_MILLISECONDS);
-
-        // Sets the fastest rate for active location updates. This interval is exact, and your
-        // application will never receive updates faster than this value.
-        mLocationRequest.setFastestInterval(FASTEST_UPDATE_INTERVAL_IN_MILLISECONDS);
-
-        mLocationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
+        locationRequest.setInterval(UPDATE_INTERVAL_IN_MILLISECONDS);
+        locationRequest.setFastestInterval(FASTEST_UPDATE_INTERVAL_IN_MILLISECONDS);
+        locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
     }
 
     private void buildLocationSettingsRequest() {
         LocationSettingsRequest.Builder builder = new LocationSettingsRequest.Builder();
-        builder.addLocationRequest(mLocationRequest);
-        mLocationSettingsRequest = builder.build();
+        builder.addLocationRequest(locationRequest);
+        locationSettingsRequest = builder.build();
     }
 
     private void startLocationUpdates() {
@@ -144,11 +133,11 @@ public class AltLocationEngine extends LocationEngine {
         buildLocationSettingsRequest();
 
         // Begin by checking if the device has the necessary location settings.
-        mSettingsClient.checkLocationSettings(mLocationSettingsRequest)
+        settingsClient.checkLocationSettings(locationSettingsRequest)
                 .addOnSuccessListener(new OnSuccessListener<LocationSettingsResponse>() {
                     @Override
                     public void onSuccess(LocationSettingsResponse locationSettingsResponse) {
-                        mConnected = true;
+                        connected = true;
                         for(LocationEngineListener lel : locationListeners)
                             lel.onConnected();
                     }
@@ -156,7 +145,7 @@ public class AltLocationEngine extends LocationEngine {
                 .addOnFailureListener(new OnFailureListener() {
                     @Override
                     public void onFailure(@NonNull Exception e) {
-                        mConnected = false;
+                        connected = false;
                         int statusCode = ((ApiException) e).getStatusCode();
                         switch (statusCode) {
                             case LocationSettingsStatusCodes.RESOLUTION_REQUIRED:
@@ -171,15 +160,12 @@ public class AltLocationEngine extends LocationEngine {
     }
 
     private void stopLocationUpdates() {
-        // It is a good practice to remove location requests when the activity is in a paused or
-        // stopped state. Doing so helps battery performance and is especially
-        // recommended in applications that request frequent location updates.
-        mFusedLocationClient.removeLocationUpdates(forwardingCallback)
+        fusedLocationClient.removeLocationUpdates(forwardingCallback)
                 .addOnCompleteListener(new OnCompleteListener<Void>() {
                     @Override
                     public void onComplete(@NonNull Task<Void> task) {
                         //nothing to do here yet
-                        mReceivingUpdates = false;
+                        receivingUpdates = false;
                     }
                 });
     }
